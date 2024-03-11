@@ -20,13 +20,13 @@ def test_jvm = {
 }
 
 dependencies {
-    testCompile('junit:junit:4.12'){
+    testImplementation('junit:junit:4.12'){
         exclude group: 'org.hamcrest'
     }
-    testCompile 'org.hamcrest:hamcrest-library:1.3'
-    testCompile 'net.java.dev.jna:jna:4.4.0'
-    testCompile 'com.twelvemonkeys.imageio:imageio-tiff:3.3.2'
-    testCompile 'org.apache.commons:commons-lang3:3.0'
+    testImplementation 'org.hamcrest:hamcrest-library:1.3'
+    testImplementation 'net.java.dev.jna:jna:4.4.0'
+    testImplementation 'com.twelvemonkeys.imageio:imageio-tiff:3.3.2'
+    testImplementation 'org.apache.commons:commons-lang3:3.0'
 }
 
 def jdk_modules = ["java.base", "java.logging", "java.prefs",
