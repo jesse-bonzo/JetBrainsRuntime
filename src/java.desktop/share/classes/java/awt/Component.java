@@ -73,10 +73,6 @@ import java.io.Serializable;
 import java.security.AccessControlContext;
 import java.security.AccessController;
 import java.util.*;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.locks.ReadWriteLock;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
-import java.util.function.Consumer;
 
 import javax.accessibility.Accessible;
 import javax.accessibility.AccessibleComponent;
@@ -4374,7 +4370,10 @@ public abstract class Component implements ImageObserver, MenuContainer,
         /**
          * The back buffers
          */
-        protected final AtomicReference<VolatileImage[]> backBuffersRef = new AtomicReference<>(null);
+        protected VolatileImage[] backBuffers; // = null
+
+        private final Object backBuffersLock = new Object();
+
         /**
          * Whether or not the drawing buffer has been recently restored from
          * a lost state.
@@ -4411,14 +4410,14 @@ public abstract class Component implements ImageObserver, MenuContainer,
          * @since 1.6
          */
         public void dispose() {
-            synchronized(backBuffersRef) {
-                Optional.ofNullable(backBuffersRef.get()).ifPresent(backBuffers -> {
-                    final int length = backBuffers.length;
-                    for (int counter = length - 1; counter >= 0; counter--) {
-                        Optional.ofNullable(backBuffers[counter]).ifPresent(Image::flush);
-                        backBuffers[counter] = null;
-                    }
-                });
+            synchronized (backBuffersLock) {
+                Optional.ofNullable(backBuffers)
+                        .ifPresent(backBuffers -> {
+                            for (int counter = backBuffers.length - 1; counter >= 0; counter--) {
+                                Optional.ofNullable(backBuffers[counter]).ifPresent(Image::flush);
+                                backBuffers[counter] = null;
+                            }
+                        });
             }
             if (Component.this.bufferStrategy == this) {
                 Component.this.bufferStrategy = null;
@@ -4431,9 +4430,9 @@ public abstract class Component implements ImageObserver, MenuContainer,
          * @param numBuffers the number of buffers to create
          */
         protected void createBackBuffers(int numBuffers) {
-            synchronized(backBuffersRef) {
+            synchronized (backBuffersLock) {
                 if (numBuffers == 0) {
-                    backBuffersRef.set(null);
+                    backBuffers = null;
                 } else {
                     // save the current bounds
                     width = getWidth();
@@ -4447,26 +4446,20 @@ public abstract class Component implements ImageObserver, MenuContainer,
                     // be > 0 so that creating the image won't fail.
                     iWidth = Math.max(1, iWidth);
                     iHeight = Math.max(1, iHeight);
-                    if (backBuffersRef.get() == null) {
-                        backBuffersRef.set(new VolatileImage[numBuffers]);
+                    if (backBuffers == null) {
+                        backBuffers = new VolatileImage[numBuffers];
                     } else {
                         // flush any existing backbuffers
-                        Optional.ofNullable(backBuffersRef.get()).ifPresent(backBuffers -> {
-                            for (int i = 0; i < numBuffers; i++) {
-                                Optional.ofNullable(backBuffers[i]).ifPresent(Image::flush);
-                                backBuffers[i] = null;
-                            }
-                        });
+                        for (int i = 0; i < numBuffers; i++) {
+                            Optional.ofNullable(backBuffers[i]).ifPresent(Image::flush);
+                            backBuffers[i] = null;
+                        }
                     }
 
                     // create the backbuffers
-                    int finalIWidth = iWidth;
-                    int finalIHeight = iHeight;
-                    Optional.ofNullable(backBuffersRef.get()).ifPresent(backBuffers -> {
-                        for (int i = 0; i < numBuffers; i++) {
-                            backBuffers[i] = createVolatileImage(finalIWidth, finalIHeight);
-                        }
-                    });
+                    for (int i = 0; i < numBuffers; i++) {
+                        backBuffers[i] = createVolatileImage(iWidth, iHeight);
+                    }
                 }
             }
         }
@@ -4499,8 +4492,8 @@ public abstract class Component implements ImageObserver, MenuContainer,
          * If there is no back buffer, returns null.
          */
         Image getBackBuffer() {
-            synchronized(backBuffersRef) {
-                return Optional.ofNullable(backBuffersRef.get())
+            synchronized (backBuffersLock) {
+                return Optional.ofNullable(backBuffers)
                         .map(backBuffers -> backBuffers[backBuffers.length - 1])
                         .orElse(null);
             }
@@ -4525,28 +4518,25 @@ public abstract class Component implements ImageObserver, MenuContainer,
          * buffer.
          */
         void showSubRegion(int x1, int y1, int x2, int y2) {
-            if (backBuffersRef.get() == null) {
-                return;
-            }
-            // Adjust location to be relative to client area.
-            x1 -= insets.left;
-            x2 -= insets.left;
-            y1 -= insets.top;
-            y2 -= insets.top;
             Graphics g = getGraphics_NoClientCode();
             if (g == null) {
                 // Not showing, bail
                 return;
             }
-            try {
-                // First image copy is in terms of Frame's coordinates, need
-                // to translate to client area.
-                g.translate(insets.left, insets.top);
-                synchronized(backBuffersRef) {
-                    final VolatileImage[] backBuffers = backBuffersRef.get();
-                    if (backBuffers != null) {
-                        for (int i = 0; backBuffers != null && i < backBuffers.length; i++) {
-                            final VolatileImage backBuffer = backBuffers[i];
+
+            // Adjust location to be relative to client area.
+            x1 -= insets.left;
+            x2 -= insets.left;
+            y1 -= insets.top;
+            y2 -= insets.top;
+
+            synchronized (backBuffersLock) {
+                if (backBuffers != null) {
+                    try {
+                        // First image copy is in terms of Frame's coordinates, need
+                        // to translate to client area.
+                        g.translate(insets.left, insets.top);
+                        for (VolatileImage backBuffer : backBuffers) {
                             if (backBuffer != null) {
                                 g.drawImage(backBuffer,
                                         x1, y1, x2, y2,
@@ -4557,11 +4547,11 @@ public abstract class Component implements ImageObserver, MenuContainer,
                                 g = backBuffer.getGraphics();
                             }
                         }
+                    } finally {
+                        if (g != null) {
+                            g.dispose();
+                        }
                     }
-                }
-            } finally {
-                if (g != null) {
-                    g.dispose();
                 }
             }
         }
@@ -4574,44 +4564,41 @@ public abstract class Component implements ImageObserver, MenuContainer,
         }
 
         void revalidate(boolean checkSize) {
-            validatedContents = false;
-            synchronized (backBuffersRef) {
-                if (backBuffersRef.get() == null) {
-                    return;
-                }
-
-                if (checkSize) {
-                    Insets insets = getInsets_NoClientCode();
-                    if (getWidth() != width || getHeight() != height ||
-                            !insets.equals(this.insets)) {
-                        // component has been resized; recreate the backbuffers
-                        createBackBuffers(backBuffersRef.get().length);
-                        if (backBuffersRef.get() == null) {
-                            return;
+            synchronized (backBuffersLock) {
+                validatedContents = false;
+                if (backBuffers != null) {
+                    if (checkSize) {
+                        Insets insets = getInsets_NoClientCode();
+                        if (getWidth() != width || getHeight() != height || !insets.equals(this.insets)) {
+                            // component has been resized; recreate the backbuffers
+                            createBackBuffers(backBuffers.length);
+                            validatedContents = true;
                         }
+                    }
+
+                    // now validate the backbuffer
+                    GraphicsConfiguration gc = getGraphicsConfiguration_NoClientCode();
+                    int returnCode = Optional.ofNullable(backBuffers)
+                            .map(backBuffers -> backBuffers[backBuffers.length - 1])
+                            .map(image -> image.validate(gc))
+                            .orElse(-1);
+                    if (returnCode == VolatileImage.IMAGE_INCOMPATIBLE) {
+                        if (checkSize && backBuffers != null) {
+                            createBackBuffers(backBuffers.length);
+
+                            // backbuffers were recreated, so validate again
+                            Optional.ofNullable(backBuffers)
+                                    .map(backBuffers -> backBuffers[backBuffers.length - 1])
+                                    .ifPresent(image -> image.validate(gc));
+                        }
+                        // else case means we're called from Swing on the toolkit
+                        // thread, don't recreate buffers as that'll deadlock
+                        // (creating VolatileImages invokes getting GraphicsConfig
+                        // which grabs treelock).
+                        validatedContents = true;
+                    } else if (returnCode == VolatileImage.IMAGE_RESTORED) {
                         validatedContents = true;
                     }
-                }
-
-                // now validate the backbuffer
-                GraphicsConfiguration gc = getGraphicsConfiguration_NoClientCode();
-                int returnCode = backBuffersRef.get()[backBuffersRef.get().length - 1].validate(gc);
-                if (returnCode == VolatileImage.IMAGE_INCOMPATIBLE) {
-                    if (checkSize) {
-                        createBackBuffers(backBuffersRef.get().length);
-                        if (backBuffersRef.get() == null) {
-                            return;
-                        }
-                        // backbuffers were recreated, so validate again
-                        backBuffersRef.get()[backBuffersRef.get().length - 1].validate(gc);
-                    }
-                    // else case means we're called from Swing on the toolkit
-                    // thread, don't recreate buffers as that'll deadlock
-                    // (creating VolatileImages invokes getting GraphicsConfig
-                    // which grabs treelock).
-                    validatedContents = true;
-                } else if (returnCode == VolatileImage.IMAGE_RESTORED) {
-                    validatedContents = true;
                 }
             }
         }
@@ -4621,10 +4608,10 @@ public abstract class Component implements ImageObserver, MenuContainer,
          * {@code getDrawGraphics}
          */
         public boolean contentsLost() {
-            synchronized (backBuffersRef) {
-                return Optional.ofNullable(backBuffersRef.get())
-                        .flatMap(backBuffers -> Optional.ofNullable(backBuffers[backBuffers.length - 1])
-                                .map(VolatileImage::contentsLost))
+            synchronized (backBuffersLock) {
+                return Optional.ofNullable(backBuffers)
+                        .map(backBuffers -> backBuffers[backBuffers.length - 1])
+                        .map(VolatileImage::contentsLost)
                         .orElse(false);
             }
         }
