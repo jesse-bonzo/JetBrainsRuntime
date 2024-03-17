@@ -25,75 +25,7 @@
 
 package java.awt;
 
-import java.awt.geom.AffineTransform;
-import java.applet.Applet;
-import java.awt.dnd.DropTarget;
-import java.awt.event.ActionEvent;
-import java.awt.event.AdjustmentEvent;
-import java.awt.event.ComponentEvent;
-import java.awt.event.ComponentListener;
-import java.awt.event.FocusEvent;
-import java.awt.event.FocusListener;
-import java.awt.event.HierarchyBoundsListener;
-import java.awt.event.HierarchyEvent;
-import java.awt.event.HierarchyListener;
-import java.awt.event.InputEvent;
-import java.awt.event.InputMethodEvent;
-import java.awt.event.InputMethodListener;
-import java.awt.event.ItemEvent;
-import java.awt.event.KeyEvent;
-import java.awt.event.KeyListener;
-import java.awt.event.MouseEvent;
-import java.awt.event.MouseListener;
-import java.awt.event.MouseMotionListener;
-import java.awt.event.MouseWheelEvent;
-import java.awt.event.MouseWheelListener;
-import java.awt.event.PaintEvent;
-import java.awt.event.TextEvent;
-import java.awt.im.InputContext;
-import java.awt.im.InputMethodRequests;
-import java.awt.image.BufferStrategy;
-import java.awt.image.ColorModel;
-import java.awt.image.ImageObserver;
-import java.awt.image.ImageProducer;
-import java.awt.image.VolatileImage;
-import java.awt.peer.ComponentPeer;
-import java.awt.peer.ContainerPeer;
-import java.awt.peer.LightweightPeer;
-import java.beans.PropertyChangeListener;
-import java.beans.PropertyChangeSupport;
-import java.beans.Transient;
-import java.io.IOException;
-import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
-import java.io.PrintStream;
-import java.io.PrintWriter;
-import java.io.Serial;
-import java.io.Serializable;
-import java.security.AccessControlContext;
-import java.security.AccessController;
-import java.util.*;
-
-import javax.accessibility.Accessible;
-import javax.accessibility.AccessibleComponent;
-import javax.accessibility.AccessibleContext;
-import javax.accessibility.AccessibleRole;
-import javax.accessibility.AccessibleSelection;
-import javax.accessibility.AccessibleState;
-import javax.accessibility.AccessibleStateSet;
-import javax.swing.JComponent;
-import javax.swing.JRootPane;
-
-import sun.awt.AWTAccessor;
-import sun.awt.AppContext;
-import sun.awt.ComponentFactory;
-import sun.security.action.GetBooleanAction;
-import sun.security.action.GetPropertyAction;
-import sun.awt.ConstrainableGraphics;
-import sun.awt.EmbeddedFrame;
-import sun.awt.RequestFocusController;
-import sun.awt.SubRegionShowable;
-import sun.awt.SunToolkit;
+import sun.awt.*;
 import sun.awt.dnd.SunDropTargetEvent;
 import sun.awt.im.CompositionArea;
 import sun.awt.image.VSyncedBSManager;
@@ -103,8 +35,30 @@ import sun.font.SunFontManager;
 import sun.java2d.SunGraphicsEnvironment;
 import sun.java2d.pipe.Region;
 import sun.java2d.pipe.hw.ExtendedBufferCapabilities;
+import sun.security.action.GetBooleanAction;
+import sun.security.action.GetPropertyAction;
 import sun.swing.SwingAccessor;
 import sun.util.logging.PlatformLogger;
+
+import javax.accessibility.*;
+import javax.swing.*;
+import java.applet.Applet;
+import java.awt.dnd.DropTarget;
+import java.awt.event.*;
+import java.awt.geom.AffineTransform;
+import java.awt.im.InputContext;
+import java.awt.im.InputMethodRequests;
+import java.awt.image.*;
+import java.awt.peer.ComponentPeer;
+import java.awt.peer.ContainerPeer;
+import java.awt.peer.LightweightPeer;
+import java.beans.PropertyChangeListener;
+import java.beans.PropertyChangeSupport;
+import java.beans.Transient;
+import java.io.*;
+import java.security.AccessControlContext;
+import java.security.AccessController;
+import java.util.*;
 
 import static sun.java2d.pipe.hw.ExtendedBufferCapabilities.VSyncType.VSYNC_DEFAULT;
 import static sun.java2d.pipe.hw.ExtendedBufferCapabilities.VSyncType.VSYNC_ON;
@@ -4403,7 +4357,8 @@ public abstract class Component implements ImageObserver, MenuContainer,
         protected BltBufferStrategy(int numBuffers, BufferCapabilities caps) {
             this.caps = caps;
             this.backBuffersLen = numBuffers - 1;
-            this.backBuffers = createBackBuffers();
+            this.backBuffers = new VolatileImage[backBuffersLen];
+            createBackBuffers();
         }
 
         /**
@@ -4427,10 +4382,8 @@ public abstract class Component implements ImageObserver, MenuContainer,
         /**
          * Creates the back buffers
          *
-         * @return back buffers
          */
-        protected VolatileImage[] createBackBuffers() {
-            VolatileImage[] newBackBuffers = null;
+        protected void createBackBuffers() {
             if (backBuffersLen > 0) {
                 // save the current bounds
                 width = getWidth();
@@ -4445,15 +4398,7 @@ public abstract class Component implements ImageObserver, MenuContainer,
                 iWidth = Math.max(1, iWidth);
                 iHeight = Math.max(1, iHeight);
 
-                // create the backbuffers
-                newBackBuffers = new VolatileImage[backBuffersLen];
-                for (int i = 0; i < newBackBuffers.length; i++) {
-                    newBackBuffers[i] = createVolatileImage(iWidth, iHeight);
-                }
-            }
-
-            // flush any existing backbuffers
-            if (backBuffers != null) {
+                // flush any existing backbuffers
                 int length = backBuffers.length;
                 for (int i = 0; i < length; i++) {
                     final VolatileImage backBuffer = backBuffers[i];
@@ -4461,8 +4406,12 @@ public abstract class Component implements ImageObserver, MenuContainer,
                         backBuffer.flush();
                     }
                 }
+
+                // create the backbuffers
+                for (int i = 0; i < backBuffers.length; i++) {
+                    backBuffers[i] = createVolatileImage(iWidth, iHeight);
+                }
             }
-            return newBackBuffers;
         }
 
         /**
@@ -4493,10 +4442,10 @@ public abstract class Component implements ImageObserver, MenuContainer,
          * If there is no back buffer, returns null.
          */
         Image getBackBuffer() {
-            if (backBuffers != null) {
-                return backBuffers[backBuffers.length - 1];
-            } else {
+            if (backBuffers.length == 0) {
                 return null;
+            } else {
+                return backBuffers[backBuffers.length - 1];
             }
         }
 
@@ -4519,10 +4468,6 @@ public abstract class Component implements ImageObserver, MenuContainer,
          * buffer.
          */
         void showSubRegion(int x1, int y1, int x2, int y2) {
-            if (backBuffers == null) {
-                return;
-            }
-
             Graphics g = getGraphics_NoClientCode();
             if (g == null) {
                 // Not showing, bail
@@ -4568,7 +4513,7 @@ public abstract class Component implements ImageObserver, MenuContainer,
         void revalidate(boolean checkSize) {
             validatedContents = false;
 
-            if (backBuffers == null) {
+            if (backBuffers.length == 0) {
                 return;
             }
 
@@ -4609,7 +4554,7 @@ public abstract class Component implements ImageObserver, MenuContainer,
          * {@code getDrawGraphics}
          */
         public boolean contentsLost() {
-            if (backBuffers == null) {
+            if (backBuffers.length == 0) {
                 return false;
             } else {
                 VolatileImage backBuffer = backBuffers[backBuffers.length - 1];
